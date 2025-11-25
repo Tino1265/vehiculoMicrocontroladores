@@ -1,0 +1,117 @@
+#include <avr/io.h>
+
+
+/* Replace with your library code */
+
+void confPin(char ddrE,uint8_t pin, uint8_t mode){
+	if(mode == 1){
+		if(ddrE=='B'){
+			DDRB|=(1<<pin);
+		}else if(ddrE=='C'){
+			DDRC|=(1<<pin);
+		}else if(ddrE=='D'){
+			DDRD |=(1<<pin);
+		}
+	}else if (mode ==0){
+		if(ddrE=='B'){
+			DDRB&=~(1<<pin);
+		}else if(ddrE=='C'){
+			DDRC&=~(1<<pin);
+		}else if(ddrE=='D'){
+			DDRD &=~(1<<pin);
+		}
+	}
+}
+void confPort(char port, uint8_t mode){
+		if(mode == 1){
+			if(port=='B'){
+				DDRB=0xFF;
+			}else if(port=='C'){
+				DDRC=0xFF;
+			}else if(port=='D'){
+				DDRD=0xFF;
+			}
+		}else if (mode ==0){
+			if(port=='B'){
+				DDRB=0x00;
+				}else if(port=='C'){
+				DDRC=0x00;
+				}else if(port=='D'){
+				DDRD=0x00;
+			}
+		}
+}
+int readPin(char port, uint8_t pin){
+	if(port == 'B'){
+		if(PINB&(1<<pin)){
+			return 1;
+		}else{
+			return 0;
+		}
+	}else if (port=='C'){
+		if(PINC&(1<<pin)){
+			return 1;
+		}else{
+			return 0;
+		}
+	}else if(port == 'D'){
+		if(PIND&(1<<pin)){
+			return 1;
+		}else{
+			return 0;
+		}
+	}else {
+		return -1;
+	}
+}
+void writePin(char port,uint8_t pin,uint8_t mode){
+	if(mode == 1){
+		if(port=='B'){
+			PORTB|=(1<<pin);
+		}else if(port=='C'){
+			PORTC|=(1<<pin);
+		}else if(port == 'D'){
+			PORTD|=(1<<pin);
+		}
+	}else if(mode ==0){
+		if(port=='B'){
+			PORTB&=~(1<<pin);
+		}else if(port=='C'){
+			PORTC&=~(1<<pin);
+		}else if(port == 'D'){
+			PORTD&=~(1<<pin);
+		}
+	}
+}
+uint8_t readPort(char port){
+	if(port == 'B'){
+		return PINB;
+	}else if(port == 'C'){
+		return PINC;
+	}else if(port == 'D'){
+		return PIND;
+	}else {
+		return 0xFF;
+	}
+}
+void writePort(char port, uint8_t mode){
+	if(port == 'B'){
+		if(mode ==1){
+			PORTB = 0Xff;
+		}else if(mode == 0){
+			PORTB = 0X00;
+		}
+	}else if(port == 'C'){
+		if(mode ==1){
+			PORTC = 0Xff;
+		}else if(mode == 0){
+			PORTC = 0X00;
+		}
+	}else if(port == 'D'){
+		if(mode == 1){
+			PORTD =0Xff;
+		}else if(mode == 0){
+			PORTD = 0x00;
+		}
+	}
+}
