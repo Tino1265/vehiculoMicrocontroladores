@@ -1,0 +1,44 @@
+#ifndef UART_H_
+#define UART_H_
+
+void UART_init();
+unsigned char UART_read();
+void UART_write(unsigned char);
+void UART_string(char*);
+
+void UART_init(){
+	UCSR0A |= (0<<U2X0);
+	UCSR0A |= (0<<MPCM0);
+	UCSR0B |= (1<<TXEN0);
+	UCSR0B |= (1<<RXEN0);
+	UCSR0B |= (0<<UDRIE0);
+	UCSR0B |= (0<<TXCIE0);
+	UCSR0B |= (1<<RXCIE0);
+	UCSR0C |= (0<<UMSEL01)|(0<<UMSEL00);
+	UCSR0C |= (0<<UPM01)|(0<<UPM00);
+	UCSR0C |= (0<<USBS0);
+	UCSR0C |= (1<<UCSZ01)|(1<<UCSZ00);
+	UCSR0C |= (0<<UCPOL0);
+	UBRR0 = 103;
+}
+
+unsigned char UART_read(){
+	if(UCSR0A&(1<<RXC0)){
+		return UDR0;
+	}
+	return 0;
+}
+
+void UART_write(unsigned char data){
+	while(!(UCSR0A&(1<<UDRE0)));
+	UDR0 = data;
+}
+
+void UART_string(char* string){
+	while(*string  != 0){
+		UART_write(*string);
+		string++;
+	}
+}
+
+#endif /* UART_H_ */
