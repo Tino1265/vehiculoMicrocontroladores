@@ -1,0 +1,363 @@
+/*
+ * batimovil.c
+ *
+ * Created: 11/18/2025 10:38:43 PM
+ * Author : NEW OWNER
+ */
+
+#define F_CPU 16000000L
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <stdlib.h>
+#include <string.h>
+#include <util/delay.h>
+#include <stdio.h>
+#include "conf.h"
+#include "UART.h"
+#define TRIGGER PD7
+volatile uint16_t echo_timeout = 0;
+#define RX_LINE_MAX 64
+
+volatile uint8_t line_ready = 0;
+volatile char rx_line[RX_LINE_MAX];
+volatile uint8_t rx_idx = 0;
+volatile uint16_t batt;
+volatile uint16_t inicio = 0;
+volatile uint16_t fin = 0;
+volatile uint8_t etapa = 0;
+volatile uint8_t readyToMeasure = 1;
+volatile uint8_t contador = 0;
+volatile uint8_t contador2 = 0;
+ISR(USART_RX_vect) {
+unsigned char data = UDR0;  
+
+if (data == '\r') return;
+
+if (line_ready) {
+if (data == '\n') {
+rx_line[0] = '\0';
+rx_idx = 0;
+line_ready = 1;
+}
+return;
+}
+
+if (data == '\n') {
+if (rx_idx < RX_LINE_MAX)
+rx_line[rx_idx] = '\0';
+else
+rx_line[RX_LINE_MAX - 1] = '\0';
+
+rx_idx = 0;
+line_ready = 1;
+} else {
+if (rx_idx < RX_LINE_MAX - 1) {
+rx_line[rx_idx++] = data;
+} else {
+// overflow: reset
+rx_idx = 0;
+}
+}
+}
+
+#define DIR_STOP  0
+#define DIR_UP    1
+#define DIR_DOWN  2
+#define DIR_LEFT  3
+#define DIR_RIGHT 4
+int isInDanger = 0;
+int preparado = 0;
+volatile uint8_t current_dir = DIR_STOP;
+volatile uint8_t pwm_value  = 255;
+float umbralDistancia = 30.0;
+float lastVoltage = 0;          
+ISR(INT0_vect) {
+if ( (PIND & (1 << PD2)) ) {
+// flanco de subida
+inicio = TCNT1;
+etapa = 1;
+
+} else {
+// flanco de bajada
+fin = TCNT1;
+etapa = 2;
+}
+}
+void enviar_trigger() {
+PORTD &= ~(1 << TRIGGER);
+_delay_us(2);
+PORTD |= (1 << TRIGGER);
+_delay_us(10);
+PORTD &= ~(1 << TRIGGER);
+}
+void PWM_init(void) {
+    DDRD |= (1 << PD6) | (1 << PD5);
+
+    TCCR0A = (1 << COM0A1) | (1 << COM0B1) | (1 << WGM01) | (1 << WGM00);
+    TCCR0B = (1 << CS01) | (1 << CS00);
+
+    OCR0A = 0;
+    OCR0B = 0;
+}
+
+// Pines de dirección en PORTB (ajusta a tu puente H)
+void setLeftDir(uint8_t mode) {
+    // mode: 1 = adelante, 0 = atrás, 2 = parado (ambos en 0)
+    if (mode == 2) {
+        writePin('B',0,0);
+        writePin('B',1,0);
+        return;
+    }
+    if (mode == 1) {
+        writePin('B',0,1);
+        writePin('B',1,0);
+    } else {
+        writePin('B',0,0);
+        writePin('B',1,1);
+    }
+}
+
+void setRightDir(uint8_t mode) {
+    if (mode == 2) {
+        writePin('B',2,0);
+        writePin('B',3,0);
+        return;
+    }
+    if (mode == 1) {
+        writePin('B',2,1);
+        writePin('B',3,0);
+    } else {
+        writePin('B',2,0);
+        writePin('B',3,1);
+    }
+}
+
+void apply_motion(void) {
+    uint8_t dir = current_dir;
+    uint8_t spd = pwm_value;
+
+    switch (dir) {
+        case DIR_UP:    
+            setLeftDir(1);
+            setRightDir(1);
+OCR0A = spd;
+OCR0B = spd;
+
+            break;
+
+        case DIR_DOWN:  // ambos atrás
+            setLeftDir(0);
+            setRightDir(0);
+OCR0A = spd;
+OCR0B = spd;
+            break;
+
+        case DIR_LEFT:  // giro tanque: izquierda atrás, derecha adelante
+            setLeftDir(0);
+            setRightDir(1);
+            OCR0A = spd;
+            OCR0B = spd;
+            break;
+
+        case DIR_RIGHT: // giro tanque: izquierda adelante, derecha atrás
+            setLeftDir(1);
+            setRightDir(0);
+            OCR0A = spd;
+            OCR0B = spd;
+            break;
+
+        default:        // STOP
+            setLeftDir(2);
+            setRightDir(2);
+            OCR0A = 0;
+            OCR0B = 0;
+            break;
+    }
+}
+
+void handle_direction_cmd(const char *line) {
+    if (line[0] != 'd' || line[1] != '=') return;
+
+    const char *cmd = line + 2;
+    while (*cmd == ' ') cmd++;
+
+    if (cmd[0] == '0') {
+        current_dir = DIR_STOP;
+    } else if (strcmp(cmd, "up") == 0) {
+        current_dir = DIR_UP;
+    } else if (strcmp(cmd, "down") == 0) {
+        current_dir = DIR_DOWN;
+    } else if (strcmp(cmd, "left") == 0) {
+        current_dir = DIR_LEFT;
+    } else if (strcmp(cmd, "right") == 0) {
+        current_dir = DIR_RIGHT;
+    } else {
+        // comando desconocido
+        return;
+    }
+
+    apply_motion();
+}
+
+void handle_speed_cmd(const char *line) {
+    if (line[0] != 'v' || line[1] != '=') return;
+
+    const char *num = line + 2;
+    while (*num == ' ') num++;
+
+    int val = atoi(num);
+    if (val < 0)   val = 0;
+    if (val > 255) val = 255;
+
+    pwm_value = (uint8_t)val;
+    apply_motion();
+}
+
+
+void claxon(){
+PORTB |= (1 << PORTB4);
+_delay_ms(100);
+PORTB &= ~(1 << PORTB4);
+_delay_ms(100);
+}
+ISR(ADC_vect){
+batt = ADC;
+preparado = 1;
+}
+float getVoltage(uint16_t x){
+float Vout = x*(5.0 /1023.0);
+float Vin = Vout*(32.0/10.0);
+return Vin;
+}
+ISR(TIMER2_COMPA_vect){
+contador = contador +1;
+contador2 = contador2 +1;
+if(contador >=183){
+if(preparado==1){
+	int state = readPin('B',5);
+char msg[40];
+float voltage = getVoltage(batt);
+if((voltage-lastVoltage)>=0.10){
+	if(state==1){
+		int entero = (int)voltage;
+		int decimal = (int)((voltage - entero) * 100+0.005);
+		if (decimal < 0) decimal = -decimal;
+		snprintf(msg, 20, "Bateria=%d.%02d", entero, decimal);
+		UART_string(msg);
+		lastVoltage = voltage;
+	}
+}
+preparado = 0;
+}
+contador = 0;
+ADCSRA |= (1<<ADSC);
+}else if(contador2 == 75){
+contador2 = 0;
+if(etapa == 1 || etapa == 0){   // 40 ms timeout
+echo_timeout = 0;
+if(isInDanger != 0){
+UART_string("ND\n");
+isInDanger = 0;
+}
+etapa = 0;
+readyToMeasure = 1;
+}
+}
+}
+int main(void) {
+    UART_init(9600, 8, 0, 1);
+    PWM_init();
+confPin('D',7,1);
+confPin('D',2,0);
+    confPin('B',0,1);
+    confPin('B',1,1);
+    confPin('B',2,1);
+    confPin('B',3,1);
+	confPin('B', 4, 1);
+	confPin('B',5,0);
+	writePin('B', 4, 0);
+    writePin('B',0,0);
+    writePin('B',1,0);
+    writePin('B',2,0);
+    writePin('B',3,0);
+EICRA |= (1 << ISC00);
+EIMSK |= (1 << INT0);
+TCCR1A = 0;
+TCCR1B = (1 << CS11);
+
+ADMUX = (1<<REFS0);
+ADMUX |= (0<<MUX3)|(0<<MUX2)|(0<<MUX1)|(0<<MUX0);
+//DIDR0 |= (1<<ADC0D) | (1<<ADC1D);
+DIDR0 |= (1<<ADC0D);
+ADCSRB |= (0<<ADTS2)|(0<<ADTS1)|(0<<ADTS0);
+ADCSRA |= (1<<ADPS2)|(1<<ADPS1)|(1<<ADPS0);
+ADCSRA &= ~(1<<ADATE);
+ADCSRA |= (1<<ADIE);
+ADCSRA |= (1<<ADEN);
+ADCSRA |= (1<<ADSC);
+
+TCCR2A = 0;
+TCCR2B = 0;
+
+// CTC mode
+TCCR2A |= (1 << WGM21);
+TCCR2B |= (1 << WGM22);
+
+// prescaler 1024
+TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);
+
+// TOP = OCR2A
+OCR2A = 255;
+TIMSK2 = (1<<OCIE2A);
+    sei();
+
+    current_dir = DIR_STOP;
+    apply_motion();
+uint16_t ticks;
+float distancia;
+    while (1) {
+
+if (readyToMeasure && etapa == 0) {
+enviar_trigger();
+TCNT1 = 0;
+readyToMeasure = 0;
+}
+if (etapa == 2) {
+ticks = fin - inicio;
+float tiempo_us = ticks * 0.5;
+distancia = tiempo_us / 58.0;
+etapa = 0;          
+readyToMeasure = 1;  
+if(distancia<=umbralDistancia && isInDanger!=1){
+isInDanger = 1;
+UART_string("SD\n");
+}else if(distancia>umbralDistancia && isInDanger !=0){
+UART_string("ND\n");
+isInDanger = 0;
+}     
+_delay_ms(60);
+}
+        if (line_ready) {
+            char line_local[RX_LINE_MAX];
+
+            cli();
+            strncpy(line_local, (const char*)rx_line, RX_LINE_MAX);
+            line_ready = 0;
+            sei();
+
+            if (line_local[0] == 'd' && line_local[1] == '=') {
+                handle_direction_cmd(line_local);
+            } else if (line_local[0] == 'v' && line_local[1] == '=') {
+                handle_speed_cmd(line_local);
+            } else if(line_local[0] == 's' && line_local[1] == '=') {
+claxon();
+            }else {
+// comando no reconocido, lo ignoramos
+
+}
+        }
+    }
+}
+
+
+
